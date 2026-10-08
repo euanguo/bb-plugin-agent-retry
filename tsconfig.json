@@ -12,7 +12,9 @@
       "node"
     ],
     "noEmit": true,
-    "skipLibCheck": false
+    "skipLibCheck": false,
+    "allowJs": true,
+    "checkJs": false
   },
   "include": [
     "server.ts",

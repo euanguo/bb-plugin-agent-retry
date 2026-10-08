@@ -18,6 +18,7 @@ import { defineSettings, resolvePolicy, type RetrySettings } from "./config.js";
 import { decideRetry, type DecisionInput } from "./policy.js";
 import {
   openStore,
+  MAX_DECISION_ROWS,
   type DecisionAction,
   type DecisionRecord,
   type Store,
@@ -32,8 +33,18 @@ export default async function plugin(bb: BbPluginApi) {
   const store = openStore(bb);
   registerCli(bb, settings, store);
 
+  // A configuration problem is worth saying once, not on every failure.
+  const reportedProblems = new Set<string>();
+  const reportProblems = (problems: readonly string[]) => {
+    for (const problem of problems) {
+      if (reportedProblems.has(problem)) continue;
+      reportedProblems.add(problem);
+      bb.log.warn(problem);
+    }
+  };
+
   bb.events.on("turn.failed", (event) =>
-    handleTurnFailed(bb, settings, store, event),
+    handleTurnFailed(bb, settings, store, event, reportProblems),
   );
 
   // A chain ends when the thread stops failing: a successful turn goes idle,
@@ -47,20 +58,46 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.deleted", clearChain);
 
   // A user who cancels the queued retry has decided against it, so the chain
-  // should not keep counting against `maxTotalSpanMs`.
+  // should not keep counting against `maxTotalSpanMs`. Only a row this plugin
+  // queued counts: another retrier's cancellation is not our business, and
+  // clearing our chain for it would hand the next failure a fresh budget.
   bb.events.on("message.cancelled", async ({ entry }) => {
     if (entry.payload.kind !== "retry") return;
+    const recorded = store.latestQueuedRetry(entry.threadId);
+    if (recorded?.queuedMessageId !== entry.id) return;
     await store.clearChain(entry.threadId);
+  });
+
+  // Chain state is cleared by the events above, but a thread can go idle or be
+  // deleted while this plugin is unloaded, and then nothing clears it. Sweep
+  // the leftovers daily; `MAX_CHAIN_AGE_MS` is far longer than any chain the
+  // policy can produce, so this never cuts a live one short.
+  bb.background.schedule("sweep", "17 4 * * *", async () => {
+    const removed = await store.sweepChains(MAX_CHAIN_AGE_MS, Date.now());
+    const pruned = store.pruneDecisions(MAX_DECISION_ROWS);
+    if (removed > 0 || pruned > 0) {
+      bb.log.info(
+        `sweep removed ${removed} stale chain(s) and pruned ${pruned} decision row(s)`,
+      );
+    }
   });
 
   bb.log.info("loaded");
 }
+
+/**
+ * How long a chain row may sit untouched before the daily sweep drops it. The
+ * longest chain the default policy can build is about eleven hours, so two
+ * weeks only ever removes state for threads nothing will ask about again.
+ */
+export const MAX_CHAIN_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export async function handleTurnFailed(
   bb: BbPluginApi,
   settings: RetrySettings,
   store: Store,
   event: TurnFailedEvent,
+  reportProblems: (problems: readonly string[]) => void = () => {},
 ): Promise<void> {
   const now = Date.now();
   let logDecisions = true;
@@ -68,6 +105,11 @@ export async function handleTurnFailed(
     const resolved = await resolvePolicy(settings);
     const { policy } = resolved;
     logDecisions = resolved.logDecisions;
+
+    // The master switch: off means a failed turn is left exactly as core left
+    // it, with no decision recorded and nothing queued.
+    if (!resolved.enabled) return;
+    reportProblems(resolved.problems);
 
     const [thread, errorText, chain] = await Promise.all([
       readThread(bb, event.threadId),

@@ -33,13 +33,19 @@ bb agent-retry retry thr_abc --send-at 10m
 
 `simulate` is the tuning tool: it replays a failure shape and prints the
 decision, the rule that made it, and the resulting wait — no need to wait for a
-real failure.
+real failure. `simulate --jitter-sample 500` pins the un-jittered centre, so a
+comparison between two policies is not noise.
 
 ## Configuration
 
 Settings → Installed plugins → Agent Retry, or `bb plugin config agent-retry`.
 Every decision records the rule that made it, so `bb agent-retry log` always
 explains an outcome.
+
+`enabled` is a master switch: off means a failed turn is left exactly as core
+left it, with **no decision recorded at all**. `dryRun` still decides and
+records, and only skips the queueing, which is why it is the right way to try a
+new policy before trusting it.
 
 Defaults: **50 attempts**, exponential backoff `30s × 1.6ⁿ` capped at 15
 minutes, 15% jitter. That is roughly 11 hours of retrying before the cap, and
@@ -65,13 +71,25 @@ The flat settings are the base policy. `advancedJson` overrides them:
 
 Resolution order for one failure: **message rules → category rule (specific,
 then `*`) → flat settings**. A matching rule supplies only the fields it names;
-everything else falls through. `advancedJson` wins over the flat settings
-wherever both speak.
+everything else falls through to the flat settings. `advancedJson` wins over
+the flat layer wherever both speak.
+
+`"*"` is a **selector, not a baseline**: it answers only for a category with no
+rule of its own, and a specific rule does not inherit from it. The two layers
+that apply to everything are the flat settings and `advancedJson.defaults` —
+put shared numbers there. So `{"*": {"maxAttempts": 5}, "overloaded":
+{"baseDelayMs": 2000}}` gives `overloaded` 2000ms **and 50 attempts**, not 5.
 
 The default skip list (`billing`, `budget-exceeded`, `unauthorized`, `policy`,
 `bad-request`, `context-window-exceeded`, `too-many-failed-attempts`,
 `active-turn-not-steerable`) exists because those fail identically on every
 attempt. An explicit category rule or message rule can put any of them back in.
+
+`inputAccepted` splits the failure space without needing the provider's error
+text, which a failure may not have: `accepted` retries only turns the provider
+had already taken (a mid-stream failure), `rejected` only requests it refused
+at the door — usually a configuration error such as a model id that does not
+exist, which fails the same way forever. `either`, the default, retries both.
 
 `dryRun` logs the decision without queueing anything — the right way to try a
 new policy.
@@ -93,6 +111,15 @@ new policy.
   The two attempt counters are independent.
 - **A chain is per thread.** It starts at the first failure, survives a plugin
   reload (it lives in kv), and is cleared when the thread goes idle, is
-  archived or deleted, or the queued retry is cancelled.
+  archived or deleted, or the queued retry this plugin queued is cancelled.
+  Another retrier's cancellation does not clear it.
+- **Housekeeping is automatic.** A daily sweep drops chain state older than
+  two weeks — the only thing that clears a chain for a thread that settled
+  while the plugin was unloaded — and the decision log keeps its newest 5000
+  rows, so neither grows without bound.
+- **A configuration problem is reported, not swallowed.** If a stored
+  `advancedJson` predates the current schema, the plugin falls back to the flat
+  layer, says so in the plugin log, and lists it under `bb agent-retry
+  explain`.
 - `bb agent-retry retry` bypasses the policy entirely — it is the manual
   escape hatch, not a way to force a policy decision.

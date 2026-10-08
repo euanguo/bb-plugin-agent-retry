@@ -55,6 +55,13 @@ export interface ScopeSettings {
   threadPatterns: RegExp[];
   retryHidden: boolean;
   retryChild: boolean;
+  /**
+   * Which half of the failure space to retry, by whether the provider had
+   * taken the input. A request refused at the door is usually a configuration
+   * error that fails identically forever, and it is the one distinction that
+   * does not need the provider's error text — which a failure may not have.
+   */
+  inputAccepted: "either" | "accepted" | "rejected";
 }
 
 export interface RetryPolicy {
@@ -135,7 +142,12 @@ export function computeDelayMs(
   settings: BackoffSettings,
   attemptNumber: number,
 ): number {
-  const step = Math.max(1, Math.floor(attemptNumber));
+  // A counter that is not a finite number is read as "the first attempt"
+  // rather than as the largest exponent: an unparseable value should give the
+  // shortest wait, never the longest.
+  const step = Number.isFinite(attemptNumber)
+    ? Math.max(1, Math.floor(attemptNumber))
+    : 1;
   let raw: number;
   switch (settings.strategy) {
     case "fixed":
@@ -237,6 +249,12 @@ function checkScope(input: DecisionInput, scope: ScopeSettings): string | null {
   if (!scope.retryChild && input.parentThreadId !== null) {
     return "child thread and retryChild is off";
   }
+  if (scope.inputAccepted === "accepted" && !input.inputAccepted) {
+    return "the provider never took the input, and scope.inputAccepted is accepted";
+  }
+  if (scope.inputAccepted === "rejected" && input.inputAccepted) {
+    return "the provider took the input, and scope.inputAccepted is rejected";
+  }
   return null;
 }
 
@@ -311,7 +329,9 @@ export function decideRetry(
 
   const { rule, key } = resolveRule(input, policy);
   const effective = mergeSettings(policy.defaults, rule);
-  const attempt = Math.max(1, Math.floor(input.attemptNumber));
+  const attempt = Number.isFinite(input.attemptNumber)
+    ? Math.max(1, Math.floor(input.attemptNumber))
+    : 1;
 
   if (attempt >= effective.maxAttempts) {
     return {

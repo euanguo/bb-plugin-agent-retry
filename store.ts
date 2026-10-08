@@ -117,7 +117,18 @@ export interface Store {
   readChain(threadId: string): Promise<ChainState | null>;
   writeChain(threadId: string, state: ChainState): Promise<void>;
   clearChain(threadId: string): Promise<void>;
+  /** Drop chain state for threads that stopped failing long ago. */
+  sweepChains(maxAgeMs: number, now: number): Promise<number>;
+  /** Keep the decision log bounded. Returns how many rows were dropped. */
+  pruneDecisions(maxRows: number): number;
 }
+
+/**
+ * Rows kept in the decision log. It is a debugging aid, not a ledger: the
+ * plugin log and the thread's own history are the durable record, and an
+ * unbounded table in a plugin database is a leak that only shows up months in.
+ */
+export const MAX_DECISION_ROWS = 5_000;
 
 /**
  * Open the plugin's own database and its kv-backed chain state. Statement
@@ -164,7 +175,11 @@ export function openStore(bb: BbPluginApi): Store {
        @errorText, @delayMs, @sendAt, @queuedMessageId
      )`,
   );
-
+  const prune = db.prepare(
+    `DELETE FROM retry_decisions WHERE id <= (
+       SELECT MAX(id) FROM retry_decisions
+     ) - @maxRows`,
+  );
   return {
     record(decision) {
       insert.run({
@@ -186,6 +201,10 @@ export function openStore(bb: BbPluginApi): Store {
         sendAt: decision.sendAt,
         queuedMessageId: decision.queuedMessageId,
       });
+      // Cheap on every insert and exact: `MAX(id)` on an integer primary key
+      // is O(1), and the delete finds nothing to do until the log is over the
+      // cap. Bounding it here means no install can grow an unbounded table.
+      prune.run({ maxRows: MAX_DECISION_ROWS });
     },
 
     list(options = {}) {
@@ -255,6 +274,35 @@ export function openStore(bb: BbPluginApi): Store {
 
     async clearChain(threadId) {
       await bb.storage.kv.delete(chainKey(threadId));
+    },
+
+    async sweepChains(maxAgeMs, now) {
+      const keys = await bb.storage.kv.list(CHAIN_PREFIX);
+      let removed = 0;
+      for (const key of keys) {
+        const state = await bb.storage.kv.get<ChainState>(key);
+        const updatedAt =
+          state !== null && typeof state === "object" ? state.updatedAt : undefined;
+        // A key we cannot read is unusable, so it goes too. This is the only
+        // thing that clears a chain the plugin was unloaded for — a thread
+        // that went idle, was archived, or was deleted while it was disabled.
+        if (typeof updatedAt !== "number" || now - updatedAt > maxAgeMs) {
+          await bb.storage.kv.delete(key);
+          removed += 1;
+        }
+      }
+      return removed;
+    },
+
+    pruneDecisions(maxRows) {
+      const before = db
+        .prepare(`SELECT COUNT(*) AS count FROM retry_decisions`)
+        .get() as { count: number };
+      prune.run({ maxRows });
+      const after = db
+        .prepare(`SELECT COUNT(*) AS count FROM retry_decisions`)
+        .get() as { count: number };
+      return before.count - after.count;
     },
   };
 }

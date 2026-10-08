@@ -69,6 +69,7 @@ const scopeSchema = z
     threadPatterns: z.array(z.string().min(1)).max(200).optional(),
     retryHidden: z.boolean().optional(),
     retryChild: z.boolean().optional(),
+    inputAccepted: z.enum(["either", "accepted", "rejected"]).optional(),
   })
   .strict();
 
@@ -293,6 +294,16 @@ export function defineSettings(bb: BbPluginApi) {
         "every thread the plugin sees, including other projects' threads.",
       default: "",
     },
+    inputAccepted: {
+      type: "select",
+      label: "Retry which failures",
+      description:
+        "either retries every failure. accepted skips a request the provider " +
+        "never took, which is usually a configuration error that fails the " +
+        "same way every time. rejected retries only those.",
+      options: ["either", "accepted", "rejected"],
+      default: "either",
+    },
     excludeProjects: {
       type: "string",
       label: "Never these projects",
@@ -367,11 +378,19 @@ export type RetrySettings = ReturnType<typeof defineSettings>;
 
 export interface ResolvedPolicy {
   policy: RetryPolicy;
+  /** The master switch. Read by the caller, not by `decideRetry`. */
+  enabled: boolean;
   /** Read by the caller, not by `decideRetry`. */
   dryRun: boolean;
   logDecisions: boolean;
   /** The advanced layer as parsed, for `explain`. */
   advanced: AdvancedPolicy;
+  /**
+   * Configuration the plugin could not use. A stored value can outlive the
+   * schema that wrote it, and silently ignoring it would make the plugin look
+   * like it is obeying a policy it is not, so every caller can surface these.
+   */
+  problems: string[];
 }
 
 function mergeList(
@@ -394,6 +413,7 @@ function compileScope(
     threadPatterns: string;
     retryHidden: boolean;
     retryChild: boolean;
+    inputAccepted: string;
   },
 ): ScopeSettings {
   const scope = advanced.scope ?? {};
@@ -411,6 +431,8 @@ function compileScope(
           ),
     retryHidden: scope.retryHidden ?? flat.retryHidden,
     retryChild: scope.retryChild ?? flat.retryChild,
+    inputAccepted: (scope.inputAccepted ??
+      flat.inputAccepted) as ScopeSettings["inputAccepted"],
   };
 }
 
@@ -439,21 +461,45 @@ export async function resolvePolicy(
   settings: RetrySettings,
 ): Promise<ResolvedPolicy> {
   const values = await settings.get();
-  let advanced: AdvancedPolicy;
+  const problems: string[] = [];
+  let advanced: AdvancedPolicy = {};
   try {
     advanced = parseAdvancedJson(values.advancedJson);
   } catch (error) {
-    // The field is schema-validated on save, so this only fires if the stored
-    // value predates a schema change. Fall back to the flat layer rather than
-    // losing retries entirely.
-    advanced = {};
-    void error;
+    // The field is schema-validated on save, so this only fires when a stored
+    // value predates the current schema. Fall back to the flat layer — losing
+    // retries entirely would be worse — but say so, loudly enough that an
+    // operator reading `bb agent-retry explain` sees the override is not in
+    // force.
+    problems.push(
+      `advancedJson was ignored: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const defaults = advanced.defaults ?? {};
+  let scope: ScopeSettings;
+  try {
+    scope = compileScope(advanced, values);
+  } catch (error) {
+    problems.push(
+      `scope was ignored: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    scope = compileScope({}, values);
+  }
+  let messageRules: CompiledMessageRule[];
+  try {
+    messageRules = compileMessageRules(advanced);
+  } catch (error) {
+    problems.push(
+      `messageRules were ignored: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    messageRules = [];
+  }
   return {
+    enabled: values.enabled,
     dryRun: values.dryRun,
     logDecisions: values.logDecisions,
     advanced,
+    problems,
     policy: {
       defaults: {
         strategy: (defaults.strategy ?? values.strategy) as BackoffStrategy,
@@ -471,9 +517,9 @@ export async function resolvePolicy(
       maxWaitMs: values.maxWaitMs,
       honorRateLimitReset: values.honorRateLimitReset,
       resetPadMs: values.resetPadMs,
-      scope: compileScope(advanced, values),
+      scope,
       categoryRules: normaliseCategoryRules(advanced),
-      messageRules: compileMessageRules(advanced),
+      messageRules,
     },
   };
 }

@@ -51,6 +51,10 @@ Configuration lives in Settings → Installed plugins → Agent Retry, or
 `bb plugin config agent-retry`. See `skills/agent-retry/SKILL.md` for the full
 settings reference and the `advancedJson` override format.
 
+`enabled` is a master switch: off leaves a failed turn exactly as core left it
+and records nothing. `dryRun` decides and records but queues nothing, which is
+how to try a policy before trusting it.
+
 ## Layout
 
 | file | role |
@@ -59,12 +63,21 @@ settings reference and the `advancedJson` override format.
 | `config.ts` | the two config layers and how they merge |
 | `store.ts` | the SQLite decision log and the kv retry-chain state |
 | `cli.ts` | `bb agent-retry` |
-| `server.ts` | the factory: wires the event handlers, does the I/O |
+| `server.ts` | the factory: wires the event handlers, the daily sweep, and does the I/O |
 
 ## Develop
 
 ```bash
-npm test        # 39 unit + fake-host integration tests
+npm test        # 177 scenarios: policy, config, integration, CLI, hygiene
 npm run typecheck
 bb plugin dev   # rebuild and reload on save
+```
+
+`GATES.md` is the acceptance ledger for the release: every gate has a command
+and a marker that only appears once its check has passed.
+
+```bash
+node test/run-gates.mjs G1   # policy scenarios
+node test/git-install-check.mjs
+node test/live-check.mjs     # drives a real failure against a running bb
 ```

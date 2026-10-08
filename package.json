@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-agent-retry",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Retries failed turns on a configurable growing backoff \u2014 for any failure a provider reports, including unclassified ones.",
   "license": "MIT",

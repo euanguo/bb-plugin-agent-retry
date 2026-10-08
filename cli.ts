@@ -63,9 +63,14 @@ export function formatTimestamp(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function policyLines(policy: RetryPolicy, dryRun: boolean): string[] {
+function policyLines(
+  policy: RetryPolicy,
+  dryRun: boolean,
+  enabled = true,
+): string[] {
   const { defaults } = policy;
   const lines = [
+    `enabled:         ${enabled}`,
     `attempts:        ${defaults.maxAttempts} (original dispatch counts as 1)`,
     `backoff:         ${defaults.strategy} base ${formatDuration(defaults.baseDelayMs)} ` +
       `growth ${defaults.growth} cap ${formatDuration(defaults.maxDelayMs)} ` +
@@ -139,12 +144,16 @@ export function registerCli(
         "provider reports — including ones with no structured error info. " +
         "Configure it under Settings → Installed plugins, or with " +
         "`bb plugin config agent-retry`.",
+      // A bad invocation is a usage error, and every other `bb` command says
+      // so with exit 2.
+      usageErrorExitCode: 2,
       commands: {
         status: cliCommand({
           summary: "Show the effective policy, recent activity, and pending retries",
           options: { json: JSON_OPTION },
           async run(input) {
-            const { policy, dryRun } = await resolvePolicy(settings);
+            const { policy, dryRun, enabled, problems } =
+              await resolvePolicy(settings);
             const since = Date.now() - 24 * 60 * 60 * 1000;
             const counts = store.countsSince(since);
             const pending = await listPendingRetries(bb, store);
@@ -152,14 +161,22 @@ export function registerCli(
               return {
                 exitCode: 0,
                 stdout: JSON.stringify(
-                  { policy: serialisePolicy(policy), dryRun, counts, pending },
+                  {
+                    enabled,
+                    policy: serialisePolicy(policy),
+                    dryRun,
+                    counts,
+                    pending,
+                    problems,
+                  },
                   null,
                   2,
                 ),
               };
             }
             const lines = [
-              ...policyLines(policy, dryRun),
+              ...policyLines(policy, dryRun, enabled),
+              ...problems.map((problem) => `problem:         ${problem}`),
               "",
               `last 24h:        ${counts.retry} queued, ${counts.skip} declined, ` +
                 `${counts.error} failed to queue` +
@@ -229,10 +246,12 @@ export function registerCli(
                 exitCode: 0,
                 stdout: JSON.stringify(
                   {
+                    enabled: resolved.enabled,
                     policy: serialisePolicy(resolved.policy),
                     dryRun: resolved.dryRun,
                     logDecisions: resolved.logDecisions,
                     advanced: resolved.advanced,
+                    problems: resolved.problems,
                   },
                   null,
                   2,
@@ -240,7 +259,12 @@ export function registerCli(
               };
             }
             const lines = [
-              ...policyLines(resolved.policy, resolved.dryRun),
+              ...policyLines(
+                resolved.policy,
+                resolved.dryRun,
+                resolved.enabled,
+              ),
+              ...resolved.problems.map((problem) => `problem:         ${problem}`),
               "",
               `decision log:    ${resolved.logDecisions ? "on" : "off"}`,
               "",
@@ -343,7 +367,7 @@ export function registerCli(
             json: JSON_OPTION,
           },
           async run(input) {
-            const { policy, dryRun } = await resolvePolicy(settings);
+            const { policy, dryRun, enabled } = await resolvePolicy(settings);
             const now = Date.now();
             const category =
               input.options.category === "none" ? null : input.options.category;
@@ -387,11 +411,21 @@ export function registerCli(
             if (input.options.json) {
               return {
                 exitCode: 0,
-                stdout: JSON.stringify({ decision, input: decisionInput, dryRun }, null, 2),
+                stdout: JSON.stringify(
+                  { decision, input: decisionInput, dryRun, enabled },
+                  null,
+                  2,
+                ),
               };
             }
+            const suppressed =
+              decision.action === "retry" && dryRun
+                ? " (suppressed by dry run)"
+                : decision.action === "retry" && !enabled
+                  ? " (ignored: the plugin is disabled)"
+                  : "";
             const lines = [
-              `action:    ${decision.action}${dryRun && decision.action === "retry" ? " (suppressed by dry run)" : ""}`,
+              `action:    ${decision.action}${suppressed}`,
               `rule:      ${decision.rule}`,
               `reason:    ${decision.reason}`,
             ];
@@ -479,11 +513,29 @@ export function registerCli(
               input.options["send-at"] === undefined
                 ? null
                 : Date.now() + input.options["send-at"];
-            const result = await bb.sdk.threads.retry({
-              threadId,
-              reason,
-              ...(sendAt === null ? {} : { sendAt }),
-            });
+            let result: Awaited<ReturnType<typeof bb.sdk.threads.retry>>;
+            try {
+              result = await bb.sdk.threads.retry({
+                threadId,
+                reason,
+                ...(sendAt === null ? {} : { sendAt }),
+              });
+            } catch (error) {
+              // Core refuses a retry for a thread that is not in `error`, or
+              // when another retry for the same turn is already waiting. Both
+              // are the operator's to fix, so they are usage errors with a
+              // hint rather than a stack trace.
+              throw new PluginCliError(
+                error instanceof Error ? error.message : String(error),
+                {
+                  code: "retry_refused",
+                  hint:
+                    "The thread must be in error with a failed turn, and it " +
+                    "may already hold one queued retry. Check `bb thread show " +
+                    `${threadId}", and \`bb agent-retry status\`.`,
+                },
+              );
+            }
             // A queued manual retry is an ordinary pending retry, so record it:
             // `status` should list it and `cancel` should be able to drop it.
             if (result.delivery === "queued") {
