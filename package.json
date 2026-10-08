@@ -1,8 +1,8 @@
 {
   "name": "bb-plugin-agent-retry",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
-  "description": "Retries failed turns on a configurable growing backoff — for any failure a provider reports, including unclassified ones.",
+  "description": "Retries failed turns on a configurable growing backoff \u2014 for any failure a provider reports, including unclassified ones.",
   "license": "MIT",
   "author": "Euan Guo (https://github.com/euanguo)",
   "repository": {
@@ -25,7 +25,7 @@
   },
   "bb": {
     "name": "Agent Retry",
-    "description": "Retries failed turns on a configurable growing backoff — for any failure a provider reports, including unclassified ones.",
+    "description": "Retries failed turns on a configurable growing backoff \u2014 for any failure a provider reports, including unclassified ones.",
     "branding": {
       "icon": "RotateCcw"
     },
