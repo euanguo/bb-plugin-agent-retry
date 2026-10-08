@@ -1,0 +1,68 @@
+{
+  "name": "bb-plugin-agent-retry",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Retries failed turns on a configurable growing backoff — for any failure a provider reports, including unclassified ones.",
+  "license": "MIT",
+  "author": "Euan Guo (https://github.com/euanguo)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/euanguo/bb-plugin-agent-retry.git"
+  },
+  "homepage": "https://github.com/euanguo/bb-plugin-agent-retry#readme",
+  "keywords": [
+    "bb",
+    "bb-plugin",
+    "retry",
+    "backoff",
+    "resilience",
+    "threads",
+    "provider"
+  ],
+  "engines": {
+    "bb": ">=0.45",
+    "bbPluginSdk": ">=0.6.23"
+  },
+  "bb": {
+    "name": "Agent Retry",
+    "description": "Retries failed turns on a configurable growing backoff — for any failure a provider reports, including unclassified ones.",
+    "branding": {
+      "icon": "RotateCcw"
+    },
+    "server": "./server.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.23",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "cron-parser": "^5.10.1",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.7"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": [
+    "dist",
+    "server.ts",
+    "policy.ts",
+    "config.ts",
+    "store.ts",
+    "cli.ts",
+    "skills",
+    "README.md",
+    "PLUGIN_OVERVIEW.md",
+    "LICENSE"
+  ]
+}
