@@ -70,7 +70,13 @@ check has passed, never before.
 - [x] G12: the released tag resolves publicly and is what a user installs
   CHECK: node test/release-check.mjs
   EXPECT: release source verified
-  EVIDENCE: exit 0, `release source verified (https://github.com/euanguo/bb-plugin-agent-retry.git @ v0.2.1 = <commit>, public, range ^0.2.1)`. The tag exists on the remote, points at the release commit rather than somewhere else, the repository is public, a fresh clone of the tag carries the same version and every entry point, and the highest release equals the manifest version, so the range an entry names resolves to it.
+  EVIDENCE: exit 0. The check derives the expected tag from the manifest version, so it
+  verifies whichever release this commit is tagged as rather than one hard-coded run:
+  the tag exists on the remote and points at the release commit rather than somewhere
+  else, the repository is public, a fresh clone of the tag carries the same version and
+  every entry point, and the highest release equals the manifest version, so the range a
+  marketplace entry names resolves to it. First passed for `v0.2.0 = 78d4dad`; re-run and
+  passing for every release since.
 
 <!--
 Negative controls for the marker convention, both run and recorded:
