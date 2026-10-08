@@ -125,9 +125,11 @@ run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
 run("npm", ["run", "build"]);
 
 // `check` is `build --liveness`, which runs one `git ls-remote` per entry —
-// three hundred-odd sequential network calls. A dropped TLS connection there is
-// a network fault, not a validation failure, so it is retried, and a retry is
-// reported rather than hidden.
+// three hundred-odd sequential network calls — and this machine drops a TLS
+// connection every so often. Every failure is retried, not just one matching a
+// message: the deterministic half of the check (schema, `publishedAt`, entry
+// consistency) fails identically on a retry, so retrying cannot mask a real
+// problem, and every retry is reported rather than hidden.
 const attempts = 3;
 let checked = false;
 for (let attempt = 1; attempt <= attempts && !checked; attempt += 1) {
@@ -141,15 +143,12 @@ for (let attempt = 1; attempt <= attempts && !checked; attempt += 1) {
     }
   } catch (error) {
     const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
-    const transient = /SSL_ERROR_SYSCALL|Could not resolve host|Failed to connect|timed out/iu.test(
-      output,
-    );
-    if (!transient || attempt === attempts) {
+    if (attempt === attempts) {
       process.stderr.write(output.slice(-4000));
-      fail(`npm run check failed after ${attempt} attempt(s)`);
+      fail(`npm run check failed on all ${attempts} attempts`);
     }
     process.stderr.write(
-      `note: marketplace liveness attempt ${attempt} hit a network fault; retrying\n`,
+      `note: marketplace liveness attempt ${attempt} of ${attempts} failed; retrying\n`,
     );
   }
 }
