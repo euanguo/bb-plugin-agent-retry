@@ -54,17 +54,41 @@ if (!categories.includes(entry.category)) {
   fail(`category ${entry.category} is not one of ${categories.join(", ")}`);
 }
 
-// The icon is vendored, hashed, and inside the size rule.
-const iconFile = entry.icon.url.replace(/^\.\//u, "");
-const iconPath = path.join(marketplaceDir, iconFile);
-if (!existsSync(iconPath)) fail(`icon ${iconFile} is missing`);
-if (!iconFile.startsWith("icons/")) fail(`icon ${iconFile} is not vendored in icons/`);
-const iconBytes = readFileSync(iconPath).length;
-if (iconBytes > 256 * 1024) fail(`icon is ${iconBytes} bytes, over the 256 KiB cap`);
-const hash = execFileSync("shasum", ["-a", "256", iconPath], { encoding: "utf8" })
-  .split(/\s+/u)[0]
-  .slice(0, 8);
-if (!iconFile.includes(hash)) fail(`icon filename does not carry its hash (${hash})`);
+// The icon is either a vendored, hashed file or a BB host icon name.
+const iconBytes = 0;
+if (typeof entry.icon === "string") {
+  if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(entry.icon)) {
+    fail(`icon name ${entry.icon} is not a BB host icon name`);
+  }
+  // "Do not invent a host icon name": check it against bb's own icon
+  // registry when a bb installation is reachable from here.
+  const assetsDir = "/Applications/bb Nightly.app/Contents/Resources/app.asar.unpacked/node_modules/bb-app/app/dist/assets";
+  const candidates = existsSync(assetsDir)
+    ? readdirSync(assetsDir).filter((name) => name.startsWith("icon-extended-"))
+    : [];
+  if (candidates.length > 0) {
+    const registry = candidates
+      .map((name) => readFileSync(path.join(assetsDir, name), "utf8"))
+      .join("\n");
+    if (!registry.includes(`${entry.icon}:`)) {
+      fail(`host icon ${entry.icon} is not in bb's icon registry`);
+    }
+  } else {
+    process.stderr.write(
+      `note: no bb installation found to confirm the host icon ${entry.icon}\n`,
+    );
+  }
+} else {
+  const iconFile = entry.icon.url.replace(/^\.\//u, "");
+  const iconPath = path.join(marketplaceDir, iconFile);
+  if (!existsSync(iconPath)) fail(`icon ${iconFile} is missing`);
+  if (!iconFile.startsWith("icons/")) fail(`icon ${iconFile} is not vendored in icons/`);
+  if (readFileSync(iconPath).length > 256 * 1024) fail(`icon is over the 256 KiB cap`);
+  const hash = execFileSync("shasum", ["-a", "256", iconPath], { encoding: "utf8" })
+    .split(/\s+/u)[0]
+    .slice(0, 8);
+  if (!iconFile.includes(hash)) fail(`icon filename does not carry its hash (${hash})`);
+}
 
 // Screenshots: referenced, present, wide enough, small enough, and no orphans.
 const screenshots = entry.screenshots ?? [];
@@ -102,5 +126,5 @@ run("npm", ["run", "build"]);
 run("npm", ["run", "check"]);
 
 process.stdout.write(
-  `marketplace validation passed (entry, icon ${iconBytes}B, ${screenshots.length} screenshot(s), ${overview.length}-char overview)\n`,
+  `marketplace validation passed (entry, icon ${typeof entry.icon === "string" ? entry.icon : `${iconBytes}B`}, ${screenshots.length} screenshot(s), ${overview.length}-char overview)\n`,
 );
