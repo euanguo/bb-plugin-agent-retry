@@ -123,7 +123,36 @@ if (overview.length > 4000) fail("overview is over 4000 characters");
 // The marketplace's own two commands, which are the real gate.
 run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
 run("npm", ["run", "build"]);
-run("npm", ["run", "check"]);
+
+// `check` is `build --liveness`, which runs one `git ls-remote` per entry —
+// three hundred-odd sequential network calls. A dropped TLS connection there is
+// a network fault, not a validation failure, so it is retried, and a retry is
+// reported rather than hidden.
+const attempts = 3;
+let checked = false;
+for (let attempt = 1; attempt <= attempts && !checked; attempt += 1) {
+  try {
+    run("npm", ["run", "check"]);
+    checked = true;
+    if (attempt > 1) {
+      process.stderr.write(
+        `note: the marketplace liveness check passed on attempt ${attempt} of ${attempts}\n`,
+      );
+    }
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    const transient = /SSL_ERROR_SYSCALL|Could not resolve host|Failed to connect|timed out/iu.test(
+      output,
+    );
+    if (!transient || attempt === attempts) {
+      process.stderr.write(output.slice(-4000));
+      fail(`npm run check failed after ${attempt} attempt(s)`);
+    }
+    process.stderr.write(
+      `note: marketplace liveness attempt ${attempt} hit a network fault; retrying\n`,
+    );
+  }
+}
 
 process.stdout.write(
   `marketplace validation passed (entry, icon ${typeof entry.icon === "string" ? entry.icon : `${iconBytes}B`}, ${screenshots.length} screenshot(s), ${overview.length}-char overview)\n`,
