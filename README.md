@@ -24,11 +24,16 @@ backoff needs.
 ## Install
 
 ```bash
-cd ~/bb-plugin-src/bb-plugin-agent-retry
+bb plugin install git:https://github.com/euanguo/bb-plugin-agent-retry.git@^0.1.0
+bb plugin disable provider-retry   # otherwise the two retriers race
+```
+
+Or from a local checkout:
+
+```bash
 npm install
 bb plugin build
 bb plugin install . --yes
-bb plugin disable provider-retry   # otherwise the two retriers race
 ```
 
 ## Use
